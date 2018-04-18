@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from datetime import datetime
 
 from collections import Counter
 from sklearn import svm, datasets
@@ -254,22 +255,68 @@ def processtiers(df):
                 dftier = dftier.append({"RTN": rtn, "Tier": 2}, ignore_index=True)
     return dftier
 
+# def isTier1D(row):
+#     t1 = row["Notification"]
+#     t2 = row["Phase1Cs"]
+#     t3 = row["End Date"]
+#     t4 = row["Regulatory End Date"]
+#     status = row["Status"]
+#     if not pd.isnull(t2): # those with phase 1 date
+#         T = t2 - t1 # the length of phase 1
+#     elif not pd.isnull(t3):
+#         T = t3 - t1 # the length of the whole project
+#     else: # those without phase 1 date
+#         return True
+#     if T.days <= 365: # 365 + 7 = 372
+#         return False # not Tier 1D
+#     else:
+#         return True # Tier 1D
 def isTier1D(row):
+    t = row["length"]
+    if t < 400:
+        return "Non-Tier1D"
+    else:
+        return "Tier1D"
+
+def isPTier1D(row):
+    t = row["length"]
+    if t < 700:
+        return "Non-Tier1D"
+    else:
+        return "Persist-Tier1D"
+
+def daylength(row):
     t1 = row["Notification"]
     t2 = row["Phase1Cs"]
-    t3 = row["End Date"]
-    if not pd.isnull(t2): # those with phase 1 date
-        T = t2 - t1 # the length of phase 1
-    else: # those without phase 1 date
-        T = t3 - t1 # the length of the whole project
-    if T.days <= 372: # 365 + 7 = 372
-        return False # not Tier 1D
+    # t3 = row["End Date"]
+    t4 = row["Regulatory End Date"]
+    raonr = row["RaoNr"]
+    status = row["Status"]
+    if status == "TIER1D":
+        return 999
     else:
-        return True # Tier 1D
+        if status in ["RAO", "PSC", "PSNC", "SPECPR", "TMPS", "RAONR"]:
+            T = t4 - t1
+        elif status in ["REMOPS", "ROSTRM", "TCLASS", "TIERI", "TIERII"]:
+            if not pd.isnull(t2):
+                T = t2 - t1
+            else:
+                t5 = raonr.split(" ")[1]
 
+                m, d, y = t5.split("/")
+                t5 = datetime(int(y), int(m), int(d))
+
+                T = t5 - t1
+    return T.days
+
+def runclassifier(clf, X_train, y_train, X_test, y_test, labels):
+    clf.fit(X_train, y_train)
+    y_predict = clf.predict(X_test)
+    plot_confusion_matrix(confusion_matrix(y_test, y_predict, labels=labels), classes=labels)
+    print(classification_report(y_test, y_predict, labels=labels, target_names=labels))
 
 def plot_confusion_matrix(cm, classes,
-                          normalize=False,
+                          normalize=True,
                           title='Confusion matrix',
                           cmap=plt.cm.Blues):
     """
@@ -326,41 +373,59 @@ class convNet(nn.Module):
         return x
 
 class ANet(nn.Module):
-    def __init__(self, input_dim, hidden_layers_dim, output_dim, activations, criterion="CrossEntropy", optimizer="sgd", lr=0.01):
-        super(ANet, self).__init__()
-        self.linear_layers = nn.ModuleList()
-        self.activation_layers = nn.ModuleList()
-
-        for i, hidden_dim in enumerate(hidden_layers_dim):
-            if i == 0:
-                self.activation_layers.append(input_dim, hidden_dim)
-            else:
-                self.linear_layers.append(nn.Linear(self.linear_layers[-1].out_features, hidden_dim))
-            self.activation_layers.append(get_)
+    # def __init__(self, input_dim, hidden_layers_dim, output_dim, activations, criterion="CrossEntropy", optimizer="sgd", lr=0.01):
+    #     super(ANet, self).__init__()
+    #     self.linear_layers = nn.ModuleList()
+    #     self.activation_layers = nn.ModuleList()
+    #
+    #     for i, hidden_dim in enumerate(hidden_layers_dim):
+    #         if i == 0:
+    #             self.activation_layers.append(input_dim, hidden_dim)
+    #         else:
+    #             self.linear_layers.append(nn.Linear(self.linear_layers[-1].out_features, hidden_dim))
+    #         self.activation_layers.append(get_)
+    #
+    # def forward(self, x):
+    #     x = x.view(-1, 143)
+    #     x = F.sigmoid(self.fc1(x))
+    #     x = F.sigmoid(self.fc2(x))
+    #     x = F.sigmoid(self.fc3(x))
+    #     x = F.sigmoid(self.fc4(x))
+    #     x = F.sigmoid(self.fc5(x))
+    #     x = F.sigmoid(self.fc6(x))
+    #     x = F.sigmoid(self.fc7(x))
+    #     x = self.fc8(x)
+    #
+    #     return x
+    def __init__(self):
+        super(convNet, self).__init__()
+        self.fc1 = nn.Linear(32 * 32, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+        self.fc4 = nn.Linear(10, 2)
 
     def forward(self, x):
-        x = x.view(-1, 143)
-        x = F.sigmoid(self.fc1(x))
-        x = F.sigmoid(self.fc2(x))
-        x = F.sigmoid(self.fc3(x))
-        x = F.sigmoid(self.fc4(x))
-        x = F.sigmoid(self.fc5(x))
-        x = F.sigmoid(self.fc6(x))
-        x = F.sigmoid(self.fc7(x))
-        x = self.fc8(x)
+        x = self.pool1(F.relu(self.conv1(x)))
+        x = self.pool2(F.relu(self.conv2(x)))
+        x = x.view(-1, 32 * 32)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = self.fc4(x)
 
         return x
 
 class Clf():
-    def __init__(self, X, y):
+    def __init__(self, X, y, labels):
         self.X = X
         self.y = y
+        self.labels = labels
         self.clf_eval = pd.DataFrame(data=None, columns=['clf', 'params', 'smote', 'Trecall', 'Tprecision', 'Tf1', 'Frecall', 'Fprecision', 'Ff1'])
         # self.clf_eval = {}
         # self.clf_eval['clf'] = str(self.clf).split('(')[0]
         # self.clf_eval['smote'] = self.smote
 
-    def runKfold(self, classifier, param, smote=False, k=4):
+    def runKfold(self, classifier, param, smote=False, dr=False, drp=10, k=4):
         skf = StratifiedKFold(n_splits=k, random_state=122, shuffle=True)
         param_grid = ParameterGrid(param)
         for params in param_grid:
@@ -375,18 +440,20 @@ class Clf():
                 X_train, X_test = self.X.iloc[train_index, :], self.X.iloc[test_index, :]
                 y_train, y_test = self.y[train_index], self.y[test_index]
 
+                if dr:
+                    pca = PCA(n_components=drp)
+                    X_train = pca.fit_transform(X_train)
+                    X_test = pca.transform(X_test)
+
                 if smote:
                     X_train, y_train = SMOTE().fit_sample(X_train, y_train)
-                else:
-                    cc = RandomUnderSampler()
-                    X_train, y_train = cc.fit_sample(X_train, y_train)
                 # train
                 clf = classifier(**params)
                 clf.fit(X_train, y_train)
 
                 y_predict = clf.predict(X_test)
 
-                metrics = precision_recall_fscore_support(y_test, y_predict, labels=[1, 0])
+                metrics = precision_recall_fscore_support(y_test, y_predict, labels=self.labels)
 
                 Tprecision, Fprecision = metrics[0][0], metrics[0][1]
                 Trecall, Frecall = metrics[1][0], metrics[1][1]
@@ -410,6 +477,8 @@ class Clf():
                                   'Frecall': np.mean(Frecalls),
                                   'Fprecision': np.mean(Fprecisions),
                                   'Ff1': np.mean(Ff1s)}, ignore_index=True)
+            print("%r %r" %(str(clf).split('(')[0], params))
+            print("Done")
             # self.clf_eval['params'] = params
             # self.clf_eval['recall'] = np.mean(recalls)
 
